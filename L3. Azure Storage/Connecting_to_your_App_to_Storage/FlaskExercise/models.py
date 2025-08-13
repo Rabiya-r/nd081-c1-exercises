@@ -4,9 +4,13 @@ from werkzeug.utils import secure_filename
 from azure.storage.blob import BlobServiceClient
 import uuid
 
-blob_container = app.config['BLOB_CONTAINER']
-storage_url = "https://{}.blob.core.windows.net/".format(app.config['BLOB_ACCOUNT'])
-blob_service = BlobServiceClient(account_url=storage_url, credential=app.config['BLOB_STORAGE_KEY'])
+def get_blob_service():
+    """
+    Create a BlobServiceClient dynamically using the latest app.config values.
+    This ensures compatibility if app.config changes after the module is imported.
+    """
+    storage_url = f"https://{app.config['BLOB_ACCOUNT']}.blob.core.windows.net/"
+    return BlobServiceClient(account_url=storage_url, credential=app.config['BLOB_STORAGE_KEY'])
 
 class Animal(db.Model):
     __tablename__ = 'animals'
@@ -17,27 +21,32 @@ class Animal(db.Model):
     image_path = db.Column(db.String(100))
 
     def __repr__(self):
-        return '<Animal {}>'.format(self.body)
+        # ✅ Python 3.12 safe — f-string formatting
+        return f"<Animal {self.name}>"
 
     def save_changes(self, file):
         if file:
             filename = secure_filename(file.filename)
-            fileExtension = filename.rsplit('.', 1)[1]
-            randomFilename = str(uuid.uuid1())
-            filename = randomFilename + '.' + fileExtension
-            try:
-                blob_container = app.config['BLOB_CONTAINER']
-                storage_url = "https://{}.blob.core.windows.net/".format(app.config['BLOB_ACCOUNT'])
-                blob_service = BlobServiceClient(account_url=storage_url, credential=app.config['BLOB_STORAGE_KEY'])
+            file_extension = filename.rsplit('.', 1)[-1]
+            random_filename = f"{uuid.uuid4()}.{file_extension}"
+            filename = random_filename
 
-                blob_client = blob_service.get_blob_client(container=blob_container, blob=filename)
-                blob_client.upload_blob(file)
-                pass
+            try:
+                blob_service = get_blob_service()
+                blob_client = blob_service.get_blob_client(container=app.config['BLOB_CONTAINER'], blob=filename)
+                blob_client.upload_blob(file, overwrite=True)
+
+                # ✅ Delete old image if replacing
                 if self.image_path:
-                    blob_client = blob_service.get_blob_client(container=blob_container, blob=filename)
-                    blob_client.delete_blob()
-                    pass
+                    old_blob_client = blob_service.get_blob_client(
+                        container=app.config['BLOB_CONTAINER'],
+                        blob=self.image_path
+                    )
+                    old_blob_client.delete_blob()
+
             except Exception as err:
-                flash(err)
+                flash(str(err))
+
             self.image_path = filename
+
         db.session.commit()
